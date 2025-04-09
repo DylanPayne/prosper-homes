@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+**/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -14,11 +15,14 @@
 /coverage
 
 # next.js
-/.next/
+**/.next/
 /out/
 
 # production
 /build
+**/dist/
+**/__pycache__/
+/backend/venv/
 
 # weather data cache
 /python/weather_data.json
@@ -26,6 +30,7 @@
 # misc
 .DS_Store
 *.pem
+*.pyc
 
 # debug
 npm-debug.log*
@@ -42,3 +47,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# source maps
+**/*.map
+
+# cache
+**/.cache/

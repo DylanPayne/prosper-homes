@@ -1,1 +1,0 @@
-self.__REACT_LOADABLE_MANIFEST="{\"app/page.tsx -> next/script\":{\"id\":\"app/page.tsx -> next/script\",\"files\":[\"static/chunks/_app-pages-browser_node_modules_next_dist_api_script_js.js\"]}}"
