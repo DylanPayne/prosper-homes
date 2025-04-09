@@ -20,6 +20,9 @@
 # production
 /build
 
+# weather data cache
+/python/weather_data.json
+
 # misc
 .DS_Store
 *.pem
