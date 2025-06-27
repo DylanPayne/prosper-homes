@@ -1,32 +1,69 @@
 import json
 import os
 from datetime import datetime
-from typing import Dict, Any, List
-
+from typing import Dict, Any, List, Optional
 import requests
+import pandas as pd
+import pgeocode
 from config.debug_config import debug_print, DebugLevel
 
 # Constants
 WEATHER_DATA_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data/weather_data.json")
 OPEN_METEO_API = "https://archive-api.open-meteo.com/v1/archive"
-PARK_CITY_LAT = 40.6461
-PARK_CITY_LON = -111.4980
 
-# Use 2024 as our reference year
-START_DATE = "2024-01-01"
-END_DATE = "2024-12-31"
+def get_coordinates(zip_code: str) -> Optional[Dict[str, float]]:
+    """
+    Fetch latitude and longitude for a given ZIP code using pgeocode.
+    
+    Args:
+        zip_code: US ZIP code
+        
+    Returns:
+        Dictionary with latitude and longitude, or None if the lookup fails.
+    """
+    try:
+        nomi = pgeocode.Nominatim("us")
+        location = nomi.query_postal_code(zip_code)
+        
+        if location is not None and not location.empty:
+            return {"latitude": location.latitude, "longitude": location.longitude}
+        else:
+            debug_print(f"Failed to find coordinates for ZIP {zip_code}", DebugLevel.ERROR, "weather")
+            return None
+    except Exception as e:
+        debug_print(f"Error fetching coordinates: {str(e)}", DebugLevel.ERROR, "weather")
+        return None
 
-def fetch_park_city_weather() -> Dict[str, Any]:
+def fetch_weather_data(zip_code: str, year: int) -> Optional[Dict[str, Any]]:
     """
-    Fetch weather data for Park City, Utah and use it as default data
+    Fetch weather data for a specific ZIP code and year.
+    
+    Args:
+        zip_code: US ZIP code
+        year: Year to fetch data for
+        
+    Returns:
+        Dictionary containing weather data and metadata, or None if the fetch fails.
     """
-    debug_print("Fetching Park City weather data", DebugLevel.INFO, "weather")
+    debug_print(f"Fetching weather data for ZIP {zip_code}, year {year}", DebugLevel.INFO, "weather")
+    
+    # Get coordinates for the ZIP code
+    coordinates = get_coordinates(zip_code)
+    if not coordinates:
+        return None
+    
+    lat = coordinates["latitude"]
+    lon = coordinates["longitude"]
+    
+    # Calculate date range for the specified year
+    start_date = f"{year}-01-01"
+    end_date = f"{year}-12-31"
     
     params = {
-        "latitude": PARK_CITY_LAT,
-        "longitude": PARK_CITY_LON,
-        "start_date": START_DATE,
-        "end_date": END_DATE,
+        "latitude": lat,
+        "longitude": lon,
+        "start_date": start_date,
+        "end_date": end_date,
         "hourly": "temperature_2m",
         "temperature_unit": "fahrenheit",
         "timezone": "America/Denver"
@@ -46,7 +83,6 @@ def fetch_park_city_weather() -> Dict[str, Any]:
         
         # Create hourly_data with datetime and temperature
         for i, temp in enumerate(hourly_temps):
-            # Get the datetime from the API response
             hour_datetime = data["hourly"]["time"][i]
             hourly_data.append({
                 "datetime": hour_datetime,
@@ -55,85 +91,56 @@ def fetch_park_city_weather() -> Dict[str, Any]:
         
         weather_data = {
             "metadata": {
-                "latitude": PARK_CITY_LAT,
-                "longitude": PARK_CITY_LON,
-                "fetched_at": datetime.now().isoformat()
+                "latitude": lat,
+                "longitude": lon,
+                "fetched_at": datetime.now().isoformat(),
+                "zip_code": zip_code,
+                "year": year
             },
             "hourly_data": hourly_data
         }
         
-        # Cache the data
-        os.makedirs(os.path.dirname(WEATHER_DATA_FILE), exist_ok=True)
-        with open(WEATHER_DATA_FILE, 'w') as f:
-            json.dump({"84060": weather_data}, f, indent=2)
-            
         return weather_data
         
     except requests.exceptions.RequestException as e:
         debug_print(f"Error fetching weather data: {str(e)}", DebugLevel.ERROR, "weather")
         return None
 
-def get_weather_data(zip_code: str = "84060") -> Dict[str, Any]:
+def save_weather_to_csv(zip_code: str, year: int, output_dir: Optional[str] = None) -> str:
     """
-    Get weather data - currently returns Park City data for all ZIP codes
+    Fetch and save hourly weather data to a CSV file.
     
     Args:
-        zip_code: US ZIP code (currently ignored - always returns Park City data)
+        zip_code: US ZIP code
+        year: Year to fetch data for
+        output_dir: Optional directory to save the CSV file
         
     Returns:
-        Dictionary containing Park City weather data and metadata
+        Path to the saved CSV file, or an empty string if saving fails.
     """
-    try:
-        # Try to load existing data
-        if os.path.exists(WEATHER_DATA_FILE):
-            with open(WEATHER_DATA_FILE, 'r') as f:
-                data = json.load(f)
-                park_city_data = data.get("84060")
-                
-                # Check if data exists and is not too old (24 hours)
-                if park_city_data:
-                    fetched_at = datetime.fromisoformat(park_city_data["metadata"]["fetched_at"])
-                    age_hours = (datetime.now() - fetched_at).total_seconds() / 3600
-                    
-                    # Check if hourly_data exists, if not, we need to regenerate
-                    if "hourly_data" not in park_city_data:
-                        debug_print("Weather data format outdated, fetching new data", DebugLevel.DEBUG, "weather")
-                    elif age_hours < 24:
-                        debug_print("Using cached Park City weather data", DebugLevel.DEBUG, "weather")
-                        return park_city_data
-        
-        # If we get here, either file doesn't exist, data is missing, or too old
-        return fetch_park_city_weather()
-        
-    except Exception as e:
-        debug_print(f"Error getting weather data: {str(e)}", DebugLevel.ERROR, "weather")
-        return None
-
-def get_formatted_weather_data(zip_code: str = "84060") -> List[Dict[str, Any]]:
-    """
-    Get weather data in a more useful format with datetime and temperature columns
+    debug_print(f"Saving weather data for ZIP {zip_code}, year {year} to CSV", DebugLevel.INFO, "weather")
     
-    Args:
-        zip_code: US ZIP code (currently ignored - always returns Park City data)
-        
-    Returns:
-        List of dictionaries with datetime and temperature
-    """
-    weather_data = get_weather_data(zip_code)
+    # Fetch the weather data
+    weather_data = fetch_weather_data(zip_code, year)
     if not weather_data:
-        return []
+        debug_print("Failed to fetch weather data", DebugLevel.ERROR, "weather")
+        return ""
     
-    return weather_data.get("hourly_data", [])
-
-if __name__ == '__main__':
-    # Example usage
-    result = get_formatted_weather_data()
-    if result:
-        print(f"Successfully loaded weather data with {len(result)} temperature readings")
-        print("\nSample data (first 5 entries):")
-        for entry in result[:5]:
-            dt = entry["datetime"]
-            temp = entry["temperature"]
-            print(f"{dt}: {temp}°F")
-    else:
-        print("Failed to load weather data")
+    # Create output directory if needed
+    if not output_dir:
+        output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Create filename
+    csv_filename = f"weather_{zip_code}_{year}.csv"
+    csv_path = os.path.join(output_dir, csv_filename)
+    
+    try:
+        # Convert to DataFrame and save
+        df = pd.DataFrame(weather_data["hourly_data"])
+        df.to_csv(csv_path, index=False)
+        debug_print(f"Successfully saved weather data to {csv_path}", DebugLevel.INFO, "weather")
+        return csv_path
+    except Exception as e:
+        debug_print(f"Error saving CSV file: {str(e)}", DebugLevel.ERROR, "weather")
+        return ""
